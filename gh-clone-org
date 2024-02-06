@@ -19,6 +19,12 @@ usage()
   echo "    See: https://docs.github.com/en/github/searching-for-information-on-github/searching-on-github/searching-for-repositories"
   echo "  -n, --dry-run"
   echo "    Do not actually clone, just show what would be cloned"
+  echo "  -a, --archived"
+  echo "    Also clone archived repositories"
+  echo "  --stash"
+  echo "    Stash any changes if needed to update existing repo in place"
+  echo "  --shallow"
+  echo "    Clone with depth of 1"
   echo "  -h, --help"
   echo "    Display this message."
 }
@@ -61,6 +67,12 @@ do
       ;;
     -n | --dry-run) DRY_RUN="true"
       ;;
+    -a | --archived) ARCHIVED="true"
+      ;;
+    --stash) STASH="true"
+      ;;
+    --shallow) SHALLOW="true"
+      ;;
     -h | --help ) usage
       exit
       ;;
@@ -78,14 +90,14 @@ then
 fi
 
 JQ_QUERY='.items[].full_name'
-QUERY="search/repositories?q=org%3A$GITHUB_ORG"
+QUERY="search/repositories?q=org%3A$GITHUB_ORG+archived%3Afalse"
 if [ -n "$SEARCH" ]
 then
   QUERY="$QUERY%20$(urlencode "$SEARCH")"
 elif [ -n "$CLONE_TOPIC" ]
 then
   QUERY="$QUERY%20topic:$CLONE_TOPIC"
-else
+elif [[ ${ARCHIVED} ]]; then
   # The search api only returns up to 1000 items. If no additional search params are provided we should
   # use the orgs or users apis so we can get everything.
   JQ_QUERY='.[].full_name'
@@ -98,7 +110,7 @@ else
 fi
 
 echo "Retrieving the list of repositories: $QUERY"
-REPOS=$(gh api --paginate "$QUERY" -q "$JQ_QUERY")
+REPOS=$(gh api --paginate "$QUERY" -q "$JQ_QUERY" | sort)
 
 if [ -z "$REPOS" ]
 then
@@ -153,9 +165,18 @@ do
     echo "'$d' already exists, attempting to checkout the default branch and pull"
     cd "$d"
     default_branch="$(gh api "repos/$repo" -q '.default_branch')"
+    if ! git diff-index --quiet HEAD -- && [[ ${STASH} ]]; then
+        echo "Stashing local changes in $repo"
+        git stash save "Stashed changes from gh clone-org run"
+    fi
     git checkout "$default_branch" && git pull
     cd ..
   else
-    gh repo clone "$repo"
+      if [ $SHALLOW ]
+      then
+        gh repo clone "$repo" -- --depth 1
+      else
+      gh repo clone "$repo"
+      fi
   fi
 done
